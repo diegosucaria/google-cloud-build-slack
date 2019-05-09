@@ -1,51 +1,45 @@
+//gcloud beta functions deploy cloudBuildSlackIntegration --project=[here goes your project] --trigger-topic cloud-builds --entry-point subscribe --runtime nodejs8
+
 const { IncomingWebhook } = require('@slack/client');
 const humanizeDuration = require('humanize-duration');
-const Octokit = require('@octokit/rest');
 const config = require('./config.json');
 
 module.exports.webhook = new IncomingWebhook(config.SLACK_WEBHOOK_URL);
 module.exports.status = config.GC_SLACK_STATUS;
-
-module.exports.getGithubCommit = async (build, octokit) => {
-  try {
-    const cloudSourceRepo = build.source.repoSource.repoName;
-    const { commitSha } = build.sourceProvenance.resolvedRepoSource;
-
-    // format github_ownerName_repoName
-    const [, githubOwner, githubRepo] = cloudSourceRepo.split('_');
-
-    // get github commit
-    const githubCommit = await octokit.git.getCommit({
-      commit_sha: commitSha,
-      owner: githubOwner,
-      repo: githubRepo,
-    });
-
-    // return github commit
-    return githubCommit;
-  } catch (err) {
-    return err;
-  }
-};
+module.exports.repos = config.REPOS;
 
 // subscribe is the main function called by GCF.
 module.exports.subscribe = async (event) => {
   try {
-    const token = process.env.GITHUB_TOKEN;
-    const octokit = token && new Octokit({
-      auth: `token ${token}`,
-    });
     const build = module.exports.eventToBuild(event.data);
+
+    console.log("function executed");
+
+    if(build.source === undefined){
+      console.log("sourceless build, not sending any notification");
+      return;
+    }
+
+    const repo = build.source.repoSource.repoName.split('_')[2]; //bitbucket repo name, ie: bitbucket_owner_reponame
+
+    console.log("build for " + repo);
+
+    // Skip if the current repo is not in the repos list.
+    if (module.exports.repos.indexOf(repo) === -1) {
+      console.log("repo " + repo + " not in the repo list");
+      return;
+    }
 
     // Skip if the current status is not in the status list.
     const status = module.exports.status || ['SUCCESS', 'FAILURE', 'INTERNAL_ERROR', 'TIMEOUT'];
     if (status.indexOf(build.status) === -1) {
+      console.log("status " + build.status + " not in the status list");
       return;
     }
 
-    const githubCommit = await module.exports.getGithubCommit(build, octokit);
+    console.log("build data:", build);
 
-    const message = await module.exports.createSlackMessage(build, githubCommit);
+    const message = await module.exports.createSlackMessage(build);
     // Send message to slack.
     module.exports.webhook.send(message);
   } catch (err) {
@@ -67,7 +61,7 @@ const STATUS_COLOR = {
 };
 
 // createSlackMessage create a message from a build object.
-module.exports.createSlackMessage = async (build, githubCommit) => {
+module.exports.createSlackMessage = async (build) => {
   const buildFinishTime = new Date(build.finishTime);
   const buildStartTime = new Date(build.startTime);
 
@@ -75,12 +69,17 @@ module.exports.createSlackMessage = async (build, githubCommit) => {
   const timestamp = Math.round(((isWorking) ? buildStartTime : buildFinishTime).getTime() / 1000);
 
   const text = (isWorking)
-    ? `Build \`${build.id}\` started`
-    : `Build \`${build.id}\` finished`;
+    ? `build \`${build.id}\` started`
+    : `build \`${build.id}\` finished`;
+
+  text = "*GOOGLE CLOUD BUILD:* " + text;
+
+  const source = build.source || null;
 
   const fields = [{
     title: 'Status',
     value: build.status,
+    short: (source ? true : false)
   }];
 
   if (!isWorking) {
@@ -89,6 +88,7 @@ module.exports.createSlackMessage = async (build, githubCommit) => {
     fields.push({
       title: 'Duration',
       value: buildTime,
+      short: true
     });
   }
 
@@ -109,24 +109,19 @@ module.exports.createSlackMessage = async (build, githubCommit) => {
   };
 
   // Add source information to the message.
-  const source = build.source || null;
   if (source) {
     message.attachments[0].fields.push({
       title: 'Repository',
-      value: build.source.repoSource.repoName,
+      value: build.source.repoSource.repoName.split('_')[2],  //bitbucket repo name, ie: bitbucket_owner_reponame
+      short: true
     });
 
     message.attachments[0].fields.push({
       title: 'Branch',
       value: build.source.repoSource.branchName,
+      short: true
     });
 
-    if (githubCommit) {
-      message.attachments[0].fields.push({
-        title: 'Commit Author',
-        value: githubCommit.data.author.name,
-      });
-    }
   }
 
   // Add images to the message.

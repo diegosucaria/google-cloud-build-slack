@@ -1,1 +1,5 @@
-{"SLACK_WEBHOOK_URL":"https://hooks.slack.com/services/XXX"}
+{
+  "SLACK_WEBHOOK_URL" : "here goes your slack webhook url",
+  "GC_SLACK_STATUS": ["WORKING", "SUCCESS", "FAILURE", "TIMEOUT", "INTERNAL_ERROR"],
+  "REPOS": ["octavio"]
+}
